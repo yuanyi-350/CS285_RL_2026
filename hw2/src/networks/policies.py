@@ -59,10 +59,14 @@ class MLPPolicy(nn.Module):
     @torch.no_grad()
     def get_action(self, obs: np.ndarray) -> np.ndarray:
         """Takes a single observation (as a numpy array) and returns a single action (as a numpy array)."""
-        # TODO: implement get_action
-        action = None
+        
+        obs = obs.reshape(1, -1) # 增加 batch 维度, shape: (ob_dim,) -> (1, ob_dim)
+        obs_tensor = ptu.from_numpy(obs)
 
-        return action
+        action_distribution = self(obs_tensor)
+        action = action_distribution.sample()
+
+        return ptu.to_numpy(action)[0]
 
     def forward(self, obs: torch.FloatTensor):
         """
@@ -71,11 +75,16 @@ class MLPPolicy(nn.Module):
         flexible objects, such as a `torch.distributions.Distribution` object. It's up to you!
         """
         if self.discrete:
-            # TODO: define the forward pass for a policy with a discrete action space.
-            pass
+            logits = self.logits_net(obs)
+            return distributions.Categorical(logits=logits)
         else:
-            # TODO: define the forward pass for a policy with a continuous action space.
-            pass
+            mean = self.mean_net(obs)
+            std = torch.exp(self.logstd)
+
+            return distributions.Independent(
+                distributions.Normal(mean, std),
+                1,
+            )
 
     def update(self, obs: np.ndarray, actions: np.ndarray, *args, **kwargs) -> dict:
         """
@@ -99,11 +108,16 @@ class MLPPolicyPG(MLPPolicy):
         actions = ptu.from_numpy(actions)
         advantages = ptu.from_numpy(advantages)
 
-        # TODO: compute the policy gradient actor loss
-        loss = None
+        if self.discrete:
+            actions = actions.long() # Categorical 分布要求离散动作是整数类型
 
-        # TODO: perform an optimizer step
-        pass
+        action_distribution = self(obs)
+        log_probs = action_distribution.log_prob(actions)
+        loss = -(log_probs * advantages).mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
         return {
             "Actor Loss": loss.item(),
