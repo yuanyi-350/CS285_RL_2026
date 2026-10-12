@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from datetime import datetime
 import time
@@ -38,6 +39,16 @@ def run_training_loop(logger, args):
         fps = env.env.metadata["render_fps"]
 
     # initialize agent
+    policy_kwargs = {}
+    if args.algo == "ppo":
+        policy_kwargs = dict(
+            clip_ratio=args.clip_ratio, update_epochs=args.ppo_epochs,
+            minibatch_size=args.minibatch_size,
+        )
+    elif args.algo == "trpo":
+        policy_kwargs = dict(
+            max_kl=args.max_kl,
+        )
     agent = PGAgent(
         ob_dim,
         ac_dim,
@@ -52,6 +63,10 @@ def run_training_loop(logger, args):
         baseline_learning_rate=args.baseline_learning_rate,
         baseline_gradient_steps=args.baseline_gradient_steps,
         gae_lambda=args.gae_lambda,
+        algorithm=args.algo,
+        policy_kwargs=policy_kwargs,
+        optimizer=args.optimizer,
+        optimizer_kwargs=args.optimizer_kwargs,
     )
 
     total_envsteps = 0
@@ -59,17 +74,23 @@ def run_training_loop(logger, args):
 
     for itr in range(args.n_iter):
         print(f"\n********** Iteration {itr} ************")
-        # TODO: sample `args.batch_size` transitions using utils.sample_trajectories
-        # make sure to use `max_ep_len`
-        trajs, envsteps_this_batch = None, None
+        # Collect at least `args.batch_size` transitions with the current policy.
+        trajs, envsteps_this_batch = utils.sample_trajectories(
+            env, agent.actor, args.batch_size, max_ep_len
+        )
         total_envsteps += envsteps_this_batch
 
         # trajs should be a list of dictionaries of NumPy arrays, where each dictionary corresponds to a trajectory.
         # this line converts this into a single dictionary of lists of NumPy arrays.
         trajs_dict = {k: [traj[k] for traj in trajs] for k in trajs[0]}
 
-        # TODO: train the agent using the sampled trajectories and the agent's update function
-        train_info: dict = None
+        # Update the actor and, when enabled, the value-function baseline.
+        train_info: dict = agent.update(
+            trajs_dict["observation"],
+            trajs_dict["action"],
+            trajs_dict["reward"],
+            trajs_dict["terminated"],
+        )
 
         if itr % args.scalar_log_freq == 0:
             # save eval metrics
@@ -113,14 +134,15 @@ def run_training_loop(logger, args):
 
 def setup_arguments(args=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument("--algo", choices=("pg", "ppo", "trpo"), default="pg")
     parser.add_argument("--env_name", type=str, default='CartPole-v0')
     parser.add_argument("--exp_name", type=str, default='exp')
     parser.add_argument("--n_iter", "-n", type=int, default=200)
 
     parser.add_argument("--use_reward_to_go", "-rtg", action="store_true")
     parser.add_argument("--use_baseline", action="store_true")
-    parser.add_argument("--baseline_learning_rate", "-blr", type=float, default=5e-3)
-    parser.add_argument("--baseline_gradient_steps", "-bgs", type=int, default=5)
+    parser.add_argument("--baseline_learning_rate", "-blr", type=float, default=None)
+    parser.add_argument("--baseline_gradient_steps", "-bgs", type=int, default=None)
     parser.add_argument("--gae_lambda", type=float, default=None)
     parser.add_argument("--normalize_advantages", "-na", action="store_true")
     parser.add_argument(
@@ -130,8 +152,10 @@ def setup_arguments(args=None):
         "--eval_batch_size", "-eb", type=int, default=400
     )  # steps collected per eval iteration
 
-    parser.add_argument("--discount", type=float, default=1.0)
-    parser.add_argument("--learning_rate", "-lr", type=float, default=5e-3)
+    parser.add_argument("--discount", type=float, default=None)
+    parser.add_argument("--learning_rate", "-lr", type=float, default=None)
+    parser.add_argument("--optimizer", choices=("gd", "adam"), default="adam")
+    parser.add_argument("--optimizer_kwargs", type=json.loads, default=None)
     parser.add_argument("--n_layers", "-l", type=int, default=2)
     parser.add_argument("--layer_size", "-s", type=int, default=64)
 
@@ -143,9 +167,20 @@ def setup_arguments(args=None):
     parser.add_argument("--which_gpu", "-gpu_id", default=0)
     parser.add_argument("--video_log_freq", type=int, default=-1)
     parser.add_argument("--scalar_log_freq", type=int, default=1)
+    parser.add_argument("--clip_ratio", type=float, default=0.2)
+    parser.add_argument("--ppo_epochs", type=int, default=10)
+    parser.add_argument("--minibatch_size", type=int, default=64)
+    parser.add_argument("--max_kl", type=float, default=0.01)
 
     args = parser.parse_args(args=args)
-
+    modern = args.algo != "pg"
+    defaults = dict(discount=0.99 if modern else 1.0,
+                    learning_rate=3e-4 if modern else 5e-3,
+                    baseline_learning_rate=1e-3 if modern else 5e-3,
+                    baseline_gradient_steps=20 if modern else 5)
+    for key, value in defaults.items():
+        if getattr(args, key) is None:
+            setattr(args, key, value)
     return args
 
 

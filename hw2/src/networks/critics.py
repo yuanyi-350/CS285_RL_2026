@@ -1,7 +1,6 @@
 import itertools
 from torch import nn
 from torch.nn import functional as F
-from torch import optim
 
 import numpy as np
 import torch
@@ -19,6 +18,8 @@ class ValueCritic(nn.Module):
         n_layers: int,
         layer_size: int,
         learning_rate: float,
+        optimizer="adam",
+        optimizer_kwargs=None,
     ):
         super().__init__()
 
@@ -29,9 +30,9 @@ class ValueCritic(nn.Module):
             size=layer_size,
         ).to(ptu.device)
 
-        self.optimizer = optim.Adam(
-            self.network.parameters(),
-            learning_rate,
+        optimizer_classes = {"gd": torch.optim.SGD, "adam": torch.optim.Adam}
+        self.optimizer = optimizer_classes[optimizer](
+            self.parameters(), lr=learning_rate, **(optimizer_kwargs or {})
         )
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:

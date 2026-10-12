@@ -16,7 +16,11 @@ def sample_trajectory(
 ) -> Dict[str, np.ndarray]:
     """Sample a rollout in the environment from a policy."""
     ob = env.reset()
-    obs, acs, rewards, next_obs, terminals, image_obs = [], [], [], [], [], []
+    if isinstance(ob, tuple):  # Gym's new reset API returns (observation, info).
+        ob = ob[0]
+    # T 个 transition 对应 T+1 个状态，包含最后一步执行后的状态。
+    obs, acs, rewards, image_obs = [ob], [], [], []
+    terminateds = []
     steps = 0
     while True:
         # render an image
@@ -29,22 +33,24 @@ def sample_trajectory(
                 cv2.resize(img, dsize=(250, 250), interpolation=cv2.INTER_CUBIC)
             )
 
-        # TODO use the most recent ob to decide what to do
         ac = policy.get_action(ob)
 
-        # TODO: take that action and get reward and next ob
-        next_ob, rew, done, info = env.step(ac)
+        transition = env.step(ac)
+        if len(transition) == 5:
+            next_ob, rew, terminated, truncated, info = transition
+            done = terminated or truncated
+        else:
+            next_ob, rew, done, info = transition
+            terminated = done and not info.get("TimeLimit.truncated", False)
 
-        # TODO rollout can end due to done, or due to max_length
         steps += 1
         rollout_done = done or steps >= max_length
 
         # record result of taking that action
-        obs.append(ob)
+        obs.append(next_ob)
         acs.append(ac)
         rewards.append(rew)
-        next_obs.append(next_ob)
-        terminals.append(rollout_done)
+        terminateds.append(terminated)
 
         ob = next_ob  # jump to next timestep
 
@@ -57,8 +63,7 @@ def sample_trajectory(
         "image_obs": np.array(image_obs, dtype=np.uint8),
         "reward": np.array(rewards, dtype=np.float32),
         "action": np.array(acs, dtype=np.float32),
-        "next_observation": np.array(next_obs, dtype=np.float32),
-        "terminal": np.array(terminals, dtype=np.float32),
+        "terminated": np.array(terminateds, dtype=np.float32),
     }
 
 
@@ -120,27 +125,6 @@ def compute_metrics(trajs, eval_trajs):
     logs["Train_AverageEpLen"] = np.mean(train_ep_lens)
 
     return logs
-
-
-def convert_listofrollouts(trajs):
-    """
-    Take a list of rollout dictionaries and return separate arrays, where each array is a concatenation of that array
-    from across the rollouts.
-    """
-    observations = np.concatenate([traj["observation"] for traj in trajs])
-    actions = np.concatenate([traj["action"] for traj in trajs])
-    next_observations = np.concatenate([traj["next_observation"] for traj in trajs])
-    terminals = np.concatenate([traj["terminal"] for traj in trajs])
-    concatenated_rewards = np.concatenate([traj["reward"] for traj in trajs])
-    unconcatenated_rewards = [traj["reward"] for traj in trajs]
-    return (
-        observations,
-        actions,
-        next_observations,
-        terminals,
-        concatenated_rewards,
-        unconcatenated_rewards,
-    )
 
 
 def get_traj_length(traj):

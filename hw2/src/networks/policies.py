@@ -1,8 +1,6 @@
-import itertools
 from torch import nn
 from torch.nn import functional as F
 import torch.distributions as D
-from torch import optim
 
 import numpy as np
 import torch
@@ -26,6 +24,8 @@ class MLPPolicy(nn.Module):
         n_layers: int,
         layer_size: int,
         learning_rate: float,
+        optimizer="adam",
+        optimizer_kwargs=None,
     ):
         super().__init__()
 
@@ -36,7 +36,6 @@ class MLPPolicy(nn.Module):
                 n_layers=n_layers,
                 size=layer_size,
             ).to(ptu.device)
-            parameters = self.logits_net.parameters()
         else:
             self.mean_net = ptu.build_mlp(
                 input_size=ob_dim,
@@ -47,25 +46,20 @@ class MLPPolicy(nn.Module):
             self.logstd = nn.Parameter(
                 torch.zeros(ac_dim, dtype=torch.float32, device=ptu.device)
             )
-            parameters = itertools.chain([self.logstd], self.mean_net.parameters())
 
-        self.optimizer = optim.Adam(
-            parameters,
-            learning_rate,
+        optimizer_classes = {"gd": torch.optim.SGD, "adam": torch.optim.Adam}
+        self.optimizer = (
+            optimizer_classes[optimizer](self.parameters(), lr=learning_rate, **(optimizer_kwargs or {}))
+            if optimizer is not None else None
         )
 
         self.discrete = discrete
 
     @torch.no_grad()
     def get_action(self, obs: np.ndarray) -> np.ndarray:
-        """Takes a single observation (as a numpy array) and returns a single action (as a numpy array)."""
-        
-        obs = obs.reshape(1, -1) # 增加 batch 维度, shape: (ob_dim,) -> (1, ob_dim)
-        obs_tensor = ptu.from_numpy(obs)
-
-        action_distribution = self(obs_tensor)
-        action = action_distribution.sample()
-
+        """Sample an action; old log probabilities are computed when updating."""
+        distribution = self(ptu.from_numpy(obs.reshape(1, -1)))
+        action = distribution.sample()
         return ptu.to_numpy(action)[0]
 
     def forward(self, obs: torch.FloatTensor):
