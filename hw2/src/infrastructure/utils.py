@@ -12,10 +12,11 @@ from typing import Dict, Tuple, List
 
 
 def sample_trajectory(
-    env: gym.Env, policy: MLPPolicy, max_length: int, render: bool = False
+    env: gym.Env, policy: MLPPolicy, max_length: int, render: bool = False,
+    seed: int = None,
 ) -> Dict[str, np.ndarray]:
     """Sample a rollout in the environment from a policy."""
-    ob = env.reset()
+    ob = env.reset() if seed is None else env.reset(seed=seed)
     if isinstance(ob, tuple):  # Gym's new reset API returns (observation, info).
         ob = ob[0]
     # T 个 transition 对应 T+1 个状态，包含最后一步执行后的状态。
